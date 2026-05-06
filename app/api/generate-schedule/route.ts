@@ -21,8 +21,9 @@ export async function POST(request: Request) {
     const BPH_NAMES = ['cecillia', 'adam', 'fadhli', 'ferdi', 'anggun', 'inez', 'lulu', 'erlangga', 'nayra', 'desti', 'febri tanjung', 'elisa', 'juansyah', 'luqman'];
     const isBPH = (name: string) => BPH_NAMES.some(bph => name.toLowerCase().includes(bph));
 
-    // Variabel pelacak tugas selama 1 minggu penuh
-    let assignedThisWeek = new Set(); 
+    // Pelacak Kuota Mingguan Spesifik Per Program
+    let sasamuCountWeek = new Map();
+    let jamparikuCountWeek = new Map();
 
     for (let i = 0; i < days; i++) {
       const currentDate = new Date(startDate);
@@ -30,94 +31,109 @@ export async function POST(request: Request) {
       const dateString = currentDate.toISOString().split('T')[0];
 
       let dailyRoster = { tanggal: dateString, sesi: [] as any[] };
-      let assignedToday = new Set();
-      let bphAssignedToday = new Map(); 
+      
+      // MENCEGAH DOUBLE SHIFT DALAM 1 HARI (Siapapun dia, kalau udah tugas hari ini, coret!)
+      let assignedToday = new Set(); 
 
       for (const session of SESSIONS) {
         let sessionData = { nama_sesi: session, tugas: [] as any[] };
 
         for (const program of programs) {
+          let selectedForShift: any[] = [];
           
-          let eligibleMembers = availableMembers.filter(m => {
-            // 1. Aturan Kelas JAMPARIKU (Pagi=XI, Siang=X)
-            if (program.name === 'JAMPARIKU') {
-              if (session === 'Pagi' && !m.class_grade.startsWith('XI')) return false;
-              if (session === 'Siang' && !m.class_grade.startsWith('X.')) return false;
-            }
+          let bphInShift = 0;
+          let maxBphPerShift = program.name === 'SASAMU' ? 1 : 2; 
 
-            // 2. Aturan Perlindungan Non-BPH
-            if (!isBPH(m.full_name)) {
-              // Jika BUKAN BPH, pastikan dia belum pernah tugas minggu ini
-              if (assignedThisWeek.has(m.id)) return false;
+          const pickMember = (reqClass: string) => {
+            // Saring yang BELUM tugas hari ini dan sesuai KELAS
+            let pool = availableMembers.filter(m => 
+              !assignedToday.has(m.id) && 
+              m.class_grade.startsWith(reqClass === 'XI' ? 'XI' : 'X.')
+            );
+
+            // Pisahkan kolam BPH dan Anggota Biasa
+            let bphPool = pool.filter(m => isBPH(m.full_name));
+            let nonBphPool = pool.filter(m => !isBPH(m.full_name));
+
+            // SARING BERDASARKAN KUOTA MINGGUAN PROGRAM
+            if (program.name === 'SASAMU') {
+              // Kuota Sasamu -> BPH: Max 1, Biasa: Max 1
+              bphPool = bphPool.filter(m => (sasamuCountWeek.get(m.id) || 0) < 1);
+              nonBphPool = nonBphPool.filter(m => (sasamuCountWeek.get(m.id) || 0) < 1);
             } else {
-              // Jika BPH, pastikan dia tidak jaga lebih dari 2x dalam sehari
-              if (assignedToday.has(m.id) && (bphAssignedToday.get(m.id) || 0) >= 2) return false;
+              // Kuota Jampariku -> BPH: Max 2, Biasa: Max 1
+              bphPool = bphPool.filter(m => (jamparikuCountWeek.get(m.id) || 0) < 2);
+              nonBphPool = nonBphPool.filter(m => (jamparikuCountWeek.get(m.id) || 0) < 1);
             }
 
-            return true;
-          });
+            // Pengurutan agar pembagian adil (Mendahulukan yang total tugasnya masih sedikit)
+            const sorter = (a: any, b: any) => {
+              let aTotal = (sasamuCountWeek.get(a.id) || 0) + (jamparikuCountWeek.get(a.id) || 0);
+              let bTotal = (sasamuCountWeek.get(b.id) || 0) + (jamparikuCountWeek.get(b.id) || 0);
+              if (aTotal !== bTotal) return aTotal - bTotal; 
+              return a.current_duty - b.current_duty;
+            };
 
-          // Mengurutkan: Prioritaskan Non-BPH yang belum pernah tugas, baru gunakan BPH
-          eligibleMembers.sort((a, b) => {
-            const aAssigned = assignedThisWeek.has(a.id) ? 1 : 0;
-            const bAssigned = assignedThisWeek.has(b.id) ? 1 : 0;
-            if (aAssigned !== bAssigned) return aAssigned - bAssigned;
-            return a.current_duty - b.current_duty;
-          });
+            bphPool.sort(sorter);
+            nonBphPool.sort(sorter);
 
-          let selected = [];
-          let countOSIS = 0;
-          let countMPK = 0;
-          let skippedDueToRatio = [];
+            let selected = null;
 
-          // TAHAP 1: Pilih anggota sambil mencoba mempertahankan rasio 3:2
-          for (const member of eligibleMembers) {
-            if (selected.length < program.members_required_per_shift) {
-              if (member.organization_role === 'OSIS' && countOSIS >= 3) {
-                skippedDueToRatio.push(member);
-                continue;
-              }
-              if (member.organization_role === 'MPK' && countMPK >= 3) {
-                skippedDueToRatio.push(member);
-                continue;
-              }
+            // 1. Masukkan BPH (selama shift belum kebanyakan BPH)
+            if (bphInShift < maxBphPerShift && bphPool.length > 0) {
+              selected = bphPool[0];
+              bphInShift++;
+            } 
+            // 2. Masukkan Anggota Biasa
+            else if (nonBphPool.length > 0) {
+              selected = nonBphPool[0];
+            } 
+            // 3. Cadangan BPH (Kalau non-BPH kelas tersebut habis sama sekali)
+            else if (bphPool.length > 0) {
+              selected = bphPool[0];
+              bphInShift++;
+            }
 
-              selected.push(member);
-              assignedToday.add(member.id);
-              assignedThisWeek.add(member.id);
+            if (selected) {
+              assignedToday.add(selected.id);
               
-              if (isBPH(member.full_name)) {
-                bphAssignedToday.set(member.id, (bphAssignedToday.get(member.id) || 0) + 1);
-              }
-
-              const idx = availableMembers.findIndex(am => am.id === member.id);
+              if (program.name === 'SASAMU') sasamuCountWeek.set(selected.id, (sasamuCountWeek.get(selected.id) || 0) + 1);
+              else jamparikuCountWeek.set(selected.id, (jamparikuCountWeek.get(selected.id) || 0) + 1);
+              
+              const idx = availableMembers.findIndex(am => am.id === selected.id);
               availableMembers[idx].current_duty += 1;
-
-              if (member.organization_role === 'OSIS') countOSIS++;
-              else countMPK++;
+              selectedForShift.push(selected);
             }
+          };
+
+          // --- EKSEKUSI PEMILIHAN ---
+          if (program.name === 'SASAMU') {
+            pickMember('XI'); pickMember('XI'); pickMember('XI'); // 3 Orang Kelas XI
+            pickMember('X'); pickMember('X');                     // 2 Orang Kelas X
+          } else {
+            let targetClass = session === 'Pagi' ? 'XI' : 'X';
+            for (let k = 0; k < 5; k++) pickMember(targetClass);  // Full sesuai sesi
           }
 
-          // TAHAP 2: Jika masih kurang dari 5 orang, buang aturan rasio dan panggil yang tadi dilewati
-          if (selected.length < program.members_required_per_shift) {
-            for (const member of skippedDueToRatio) {
-              if (selected.length < program.members_required_per_shift) {
-                selected.push(member);
-                assignedToday.add(member.id);
-                assignedThisWeek.add(member.id);
-                
-                if (isBPH(member.full_name)) {
-                  bphAssignedToday.set(member.id, (bphAssignedToday.get(member.id) || 0) + 1);
-                }
-                const idx = availableMembers.findIndex(am => am.id === member.id);
-                availableMembers[idx].current_duty += 1;
-              }
+          // --- PROTOKOL DARURAT ---
+          // Jaga-jaga jika anggota benar-benar habis karena limit mingguan terlalu ketat,
+          // sistem akan mengabaikan limit mingguan demi mengisi kuota 5 orang per shift.
+          while (selectedForShift.length < program.members_required_per_shift) {
+            let emergencyPool = availableMembers.filter(m => !assignedToday.has(m.id)); // Pokoknya jangan double hari ini
+            if (emergencyPool.length > 0) {
+              let selected = emergencyPool[0];
+              assignedToday.add(selected.id);
+              selectedForShift.push(selected);
+              const idx = availableMembers.findIndex(am => am.id === selected.id);
+              availableMembers[idx].current_duty += 1;
+            } else {
+              break; 
             }
           }
 
           sessionData.tugas.push({
             program: program.name,
-            petugas: selected.map(m => `${m.full_name} (${m.organization_role})`)
+            petugas: selectedForShift.map(m => `${m.full_name} (${m.class_grade} - ${m.organization_role})`)
           });
         }
         dailyRoster.sesi.push(sessionData);
@@ -127,7 +143,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       status: 'success',
-      message: 'Jadwal 5 orang terisi penuh! Non-BPH aman 1x tugas, BPH kerja ekstra 🫡',
+      message: 'Jadwal Sukses! (Biasa: 1 Sasamu + 1 Jampariku, BPH: 1 Sasamu + 2 Jampariku, Tanpa Double Shift Harian)',
       schedule: generatedSchedule
     });
   } catch (error: any) {
