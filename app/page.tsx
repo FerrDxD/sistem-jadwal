@@ -5,22 +5,41 @@ import { supabase } from '@/lib/supabase';
 import { generateOfficialPDF } from '@/lib/generatePdf';
 
 export default function Dashboard() {
+  // ==========================================
+  // STATE AUTENTIKASI (LOGIN)
+  // ==========================================
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [pin, setPin] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  // ==========================================
+  // STATE DASHBOARD
+  // ==========================================
   const [members, setMembers] = useState<any[]>([]);
   const [isFetching, setIsFetching] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateResult, setGenerateResult] = useState<any>(null);
-  
-  // State untuk menyembunyikan/menampilkan tabel anggota
   const [showMembers, setShowMembers] = useState(false);
-
-  // State untuk Kalender: Membuat default tanggal otomatis ke hari Senin terdekat
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + ((1 + 7 - d.getDay()) % 7 || 7)); 
     return d.toISOString().split('T')[0];
   });
 
+  // Cek apakah admin sudah pernah login sebelumnya
   useEffect(() => {
+    const authStatus = localStorage.getItem('sasamujampariku_auth');
+    if (authStatus === 'true') {
+      setIsAuthenticated(true);
+    }
+    setIsCheckingAuth(false);
+  }, []);
+
+  // Fetch data anggota hanya jika sudah login
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    
     const fetchMembers = async () => {
       const { data, error } = await supabase
         .from('members')
@@ -31,22 +50,43 @@ export default function Dashboard() {
       setIsFetching(false);
     };
     fetchMembers();
-  }, []);
+  }, [isAuthenticated]);
+
+  // ==========================================
+  // FUNGSI LOGIN & LOGOUT
+  // ==========================================
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // ⚠️ GANTI PIN DI BAWAH INI SESUKA HATIMU!
+    const PIN_RAHASIA = "OSIS26"; 
+
+    if (pin === PIN_RAHASIA) {
+      setIsAuthenticated(true);
+      localStorage.setItem('sasamujampariku_auth', 'true');
+      setLoginError('');
+    } else {
+      setLoginError('PIN salah! Akses ditolak.');
+      setPin('');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('sasamujampariku_auth');
+    setPin('');
+    setGenerateResult(null);
+  };
 
   const handleGenerate = async () => {
     setIsGenerating(true);
     setGenerateResult(null);
-
     try {
       const response = await fetch('/api/generate-schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          startDate: startDate, // Sekarang tanggalnya dinamis mengambil dari kalender
-          days: 5 
-        }),
+        body: JSON.stringify({ startDate: startDate, days: 5 }),
       });
-
       const result = await response.json();
       setGenerateResult(result);
     } catch (error) {
@@ -56,13 +96,67 @@ export default function Dashboard() {
     }
   };
 
+  // Jangan render apa-apa selama masih mengecek status login (biar tidak kedip)
+  if (isCheckingAuth) return null;
+
+  // ==========================================
+  // UI 1: HALAMAN LOGIN (Jika belum login)
+  // ==========================================
+  if (!isAuthenticated) {
+    return (
+      <main className="min-h-screen bg-slate-900 flex items-center justify-center p-4 selection:bg-indigo-500 selection:text-white">
+        <div className="bg-white p-8 md:p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md border border-white/20 transform transition-all">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <span className="text-3xl">🔒</span>
+            </div>
+            <h1 className="text-2xl font-extrabold text-slate-800">Portal Admin</h1>
+            <p className="text-slate-500 text-sm mt-2">Sistem SASAMU & JAMPARIKU</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-wider">PIN Rahasia</label>
+              <input 
+                type="password" 
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                placeholder="Masukkan PIN"
+                className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 focus:bg-white outline-none transition-all text-center text-2xl tracking-[0.5em] font-mono text-slate-800"
+                autoFocus
+              />
+              {loginError && <p className="text-red-500 text-sm font-medium mt-3 text-center animate-bounce">{loginError}</p>}
+            </div>
+            <button 
+              type="submit"
+              className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-colors shadow-lg shadow-indigo-200"
+            >
+              Buka Kunci
+            </button>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  // ==========================================
+  // UI 2: HALAMAN DASHBOARD (Jika sudah login)
+  // ==========================================
   return (
     <main className="min-h-screen bg-[#F8FAFC] text-slate-800 p-4 sm:p-6 md:p-12 font-sans selection:bg-indigo-100 selection:text-indigo-900">
       <div className="max-w-6xl mx-auto space-y-6 md:space-y-8">
         
-        {/* --- HEADER SECTION --- */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white/60 backdrop-blur-xl border border-white/80 p-5 sm:p-6 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] gap-4 md:gap-0">
-          <div className="w-full md:w-auto">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white/60 backdrop-blur-xl border border-white/80 p-5 sm:p-6 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] gap-4 md:gap-0 relative">
+          
+          {/* Tombol Logout di Pojok Kanan Atas */}
+          <button 
+            onClick={handleLogout}
+            className="absolute top-6 right-6 md:top-4 md:right-6 text-sm font-semibold text-slate-400 hover:text-red-500 transition-colors"
+          >
+            Log Out 🚪
+          </button>
+
+          <div className="w-full md:w-auto mt-6 md:mt-0">
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600">
               Sistem Automasi Jadwal
             </h1>
@@ -71,7 +165,6 @@ export default function Dashboard() {
             </p>
           </div>
           
-          {/* Kelompok Kalender & Tombol */}
           <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto mt-4 md:mt-0">
             <input 
               type="date" 
@@ -94,7 +187,6 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* --- HASIL PENJADWALAN UI --- */}
         {generateResult && generateResult.status === 'success' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-5 sm:p-6 rounded-3xl border border-indigo-100 gap-4 md:gap-0">
@@ -156,9 +248,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* --- TABEL DATA ANGGOTA (DENGAN TOGGLE COLLAPSE) --- */}
         <div className="bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 overflow-hidden transition-all duration-300">
-          
           <button 
             onClick={() => setShowMembers(!showMembers)}
             className="w-full px-5 py-4 sm:px-8 sm:py-6 flex justify-between items-center hover:bg-slate-50 transition-colors focus:outline-none"
