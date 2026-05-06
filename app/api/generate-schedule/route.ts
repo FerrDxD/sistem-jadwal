@@ -17,9 +17,12 @@ export async function POST(request: Request) {
 
     const SESSIONS = ['Pagi', 'Siang'];
     
-    // Daftar BPH Sakti yang boleh Double Job
+    // Daftar 14 BPH Sakti
     const BPH_NAMES = ['cecillia', 'adam', 'fadhli', 'ferdi', 'anggun', 'inez', 'lulu', 'erlangga', 'nayra', 'desti', 'febri tanjung', 'elisa', 'juansyah', 'luqman'];
     const isBPH = (name: string) => BPH_NAMES.some(bph => name.toLowerCase().includes(bph));
+
+    // Variabel pelacak tugas selama 1 minggu penuh
+    let assignedThisWeek = new Set(); 
 
     for (let i = 0; i < days; i++) {
       const currentDate = new Date(startDate);
@@ -28,7 +31,7 @@ export async function POST(request: Request) {
 
       let dailyRoster = { tanggal: dateString, sesi: [] as any[] };
       let assignedToday = new Set();
-      let bphAssignedCount = new Map(); // Menghitung job harian BPH agar tidak > 2
+      let bphAssignedToday = new Map(); 
 
       for (const session of SESSIONS) {
         let sessionData = { nama_sesi: session, tugas: [] as any[] };
@@ -36,42 +39,55 @@ export async function POST(request: Request) {
         for (const program of programs) {
           
           let eligibleMembers = availableMembers.filter(m => {
-            // 1. Aturan Kelas JAMPARIKU
+            // 1. Aturan Kelas JAMPARIKU (Pagi=XI, Siang=X)
             if (program.name === 'JAMPARIKU') {
               if (session === 'Pagi' && !m.class_grade.startsWith('XI')) return false;
               if (session === 'Siang' && !m.class_grade.startsWith('X.')) return false;
             }
 
-            // 2. Aturan Double Job
-            if (assignedToday.has(m.id)) {
-              if (isBPH(m.full_name)) {
-                // BPH boleh double job, tapi maksimal 2 per hari
-                if ((bphAssignedCount.get(m.id) || 0) >= 2) return false;
-                return true; 
-              }
-              return false; // Bukan BPH = Tidak boleh double job
+            // 2. Aturan Perlindungan Non-BPH
+            if (!isBPH(m.full_name)) {
+              // Jika BUKAN BPH, pastikan dia belum pernah tugas minggu ini
+              if (assignedThisWeek.has(m.id)) return false;
+            } else {
+              // Jika BPH, pastikan dia tidak jaga lebih dari 2x dalam sehari
+              if (assignedToday.has(m.id) && (bphAssignedToday.get(m.id) || 0) >= 2) return false;
             }
+
             return true;
           });
 
-          // Prioritaskan yang tugasnya masih sedikit
-          eligibleMembers.sort((a, b) => a.current_duty - b.current_duty);
+          // Mengurutkan: Prioritaskan Non-BPH yang belum pernah tugas, baru gunakan BPH
+          eligibleMembers.sort((a, b) => {
+            const aAssigned = assignedThisWeek.has(a.id) ? 1 : 0;
+            const bAssigned = assignedThisWeek.has(b.id) ? 1 : 0;
+            if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+            return a.current_duty - b.current_duty;
+          });
 
           let selected = [];
           let countOSIS = 0;
           let countMPK = 0;
+          let skippedDueToRatio = [];
 
+          // TAHAP 1: Pilih anggota sambil mencoba mempertahankan rasio 3:2
           for (const member of eligibleMembers) {
             if (selected.length < program.members_required_per_shift) {
-              // Aturan rasio 3:2 OSIS/MPK
-              if (member.organization_role === 'OSIS' && countOSIS >= 3) continue;
-              if (member.organization_role === 'MPK' && countMPK >= 3) continue;
+              if (member.organization_role === 'OSIS' && countOSIS >= 3) {
+                skippedDueToRatio.push(member);
+                continue;
+              }
+              if (member.organization_role === 'MPK' && countMPK >= 3) {
+                skippedDueToRatio.push(member);
+                continue;
+              }
 
               selected.push(member);
               assignedToday.add(member.id);
+              assignedThisWeek.add(member.id);
               
               if (isBPH(member.full_name)) {
-                bphAssignedCount.set(member.id, (bphAssignedCount.get(member.id) || 0) + 1);
+                bphAssignedToday.set(member.id, (bphAssignedToday.get(member.id) || 0) + 1);
               }
 
               const idx = availableMembers.findIndex(am => am.id === member.id);
@@ -79,6 +95,23 @@ export async function POST(request: Request) {
 
               if (member.organization_role === 'OSIS') countOSIS++;
               else countMPK++;
+            }
+          }
+
+          // TAHAP 2: Jika masih kurang dari 5 orang, buang aturan rasio dan panggil yang tadi dilewati
+          if (selected.length < program.members_required_per_shift) {
+            for (const member of skippedDueToRatio) {
+              if (selected.length < program.members_required_per_shift) {
+                selected.push(member);
+                assignedToday.add(member.id);
+                assignedThisWeek.add(member.id);
+                
+                if (isBPH(member.full_name)) {
+                  bphAssignedToday.set(member.id, (bphAssignedToday.get(member.id) || 0) + 1);
+                }
+                const idx = availableMembers.findIndex(am => am.id === member.id);
+                availableMembers[idx].current_duty += 1;
+              }
             }
           }
 
@@ -94,7 +127,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       status: 'success',
-      message: 'Jadwal 2 Sesi berhasil digenerate! (BPH dikerahkan untuk backup)',
+      message: 'Jadwal 5 orang terisi penuh! Non-BPH aman 1x tugas, BPH kerja ekstra 🫡',
       schedule: generatedSchedule
     });
   } catch (error: any) {
