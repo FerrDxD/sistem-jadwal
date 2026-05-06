@@ -19,9 +19,7 @@ export async function POST(request: Request) {
 
     const SESSIONS = ['Pagi', 'Siang'];
 
-    const isClassXI = (grade: string) => grade && (grade.startsWith('XI') || grade.includes('11'));
-    const isClassX = (grade: string) => grade && !isClassXI(grade) && (grade.startsWith('X') || grade.includes('10'));
-
+    // Buku Catatan Keadilan: Melacak jumlah tugas dalam minggu ini
     let weeklyCount = new Map();
 
     for (let i = 0; i < days; i++) {
@@ -30,7 +28,7 @@ export async function POST(request: Request) {
       const dateString = currentDate.toISOString().split('T')[0];
 
       let dailyRoster = { tanggal: dateString, sesi: [] as any[] };
-      let assignedToday = new Set(); // Mencegah kerja 2x dalam sehari
+      let assignedToday = new Set(); // Harga Mati: Sehari 1 kali tugas
 
       for (const session of SESSIONS) {
         let sessionData = { nama_sesi: session, tugas: [] as any[] };
@@ -38,57 +36,52 @@ export async function POST(request: Request) {
         for (const program of programs) {
           let selectedForShift: any[] = [];
           
+          // Ambil semua anggota yang belum bertugas hari ini
           let pool = availableMembers.filter(m => !assignedToday.has(m.id));
 
-          // ✨ INTI DARI KEADILAN: Selalu prioritaskan yang tugasnya paling sedikit!
+          // ✨ KEADILAN TOTAL: Urutkan murni dari yang tugasnya paling sedikit
           pool.sort((a, b) => {
             let aWeek = weeklyCount.get(a.id) || 0;
             let bWeek = weeklyCount.get(b.id) || 0;
-            if (aWeek !== bWeek) return aWeek - bWeek; 
-            return (a.current_duty || 0) - (b.current_duty || 0);
+            if (aWeek !== bWeek) return aWeek - bWeek; // Prioritas 1: Pemerataan minggu ini
+            return (a.current_duty || 0) - (b.current_duty || 0); // Prioritas 2: Total tugas seumur hidup
           });
 
-          const tryPick = (reqClass: string | null, reqRole: string | null) => {
+          // Fungsi Pemilih Organisasi
+          const tryPick = (reqRole: string | null) => {
             let index = pool.findIndex(m => {
-              if (reqClass === 'XI' && !isClassXI(m.class_grade)) return false;
-              if (reqClass === 'X' && !isClassX(m.class_grade)) return false;
-              if (reqRole === 'OSIS' && m.organization_role !== 'OSIS') return false;
-              if (reqRole === 'MPK' && m.organization_role !== 'MPK') return false;
-              return true;
+              if (reqRole === 'OSIS' && !m.organization_role.toUpperCase().includes('OSIS')) return false;
+              if (reqRole === 'MPK' && !m.organization_role.toUpperCase().includes('MPK')) return false;
+              return true; // Lolos filter
             });
 
             if (index !== -1) {
               let candidate = pool[index];
-              pool.splice(index, 1); 
+              pool.splice(index, 1); // Cabut kandidat dari kolam
+              
               assignedToday.add(candidate.id);
               weeklyCount.set(candidate.id, (weeklyCount.get(candidate.id) || 0) + 1);
+              
               let dbIdx = availableMembers.findIndex(am => am.id === candidate.id);
               if (dbIdx !== -1) availableMembers[dbIdx].current_duty += 1;
+              
               selectedForShift.push(candidate);
               return true;
             }
             return false;
           };
 
-          // TAHAP 1: IDEAL (Cari yang kelasnya pas, perannya digabung OSIS & MPK)
-          if (program.name === 'SASAMU') {
-            tryPick('XI', 'OSIS'); tryPick('XI', 'MPK'); tryPick('XI', 'OSIS');
-            tryPick('X', 'MPK'); tryPick('X', 'OSIS');
-          } else {
-            let tClass = session === 'Pagi' ? 'XI' : 'X';
-            tryPick(tClass, 'OSIS'); tryPick(tClass, 'MPK'); tryPick(tClass, 'OSIS');
-            tryPick(tClass, 'MPK'); tryPick(tClass, 'OSIS');
-          }
+          // TAHAP 1: FORMASI CAMPURAN (Berusaha membuat rasio OSIS & MPK seimbang)
+          // Kita pakai pola: OSIS -> MPK -> OSIS -> MPK -> OSIS
+          tryPick('OSIS'); 
+          tryPick('MPK'); 
+          tryPick('OSIS'); 
+          tryPick('MPK'); 
+          tryPick('OSIS');
 
-          // TAHAP 2: KELAS PAS (Kalau MPK/OSIS habis, ambil siapa aja asalkan dari kelas yang TEPAT)
+          // TAHAP 2: PENAMBALAN BEBAS (Kalau gagal membentuk formasi di atas karena salah satu habis)
           while (selectedForShift.length < program.members_required_per_shift) {
-            let tClass = program.name === 'SASAMU' ? null : (session === 'Pagi' ? 'XI' : 'X');
-            if (!tryPick(tClass, null)) break; 
-          }
-
-          // TAHAP 3: DARURAT (Mending kelasnya kecampur daripada jadwal kosong melompong)
-          while (selectedForShift.length < program.members_required_per_shift) {
-            if (!tryPick(null, null)) break; 
+            if (!tryPick(null)) break; // Ambil SIAPA SAJA yang ada di kolam secara acak
           }
 
           sessionData.tugas.push({
@@ -110,7 +103,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       status: 'success',
-      message: 'Jadwal Penuh! MPK dilibatkan & Tugas merata otomatis.',
+      message: 'Jadwal Fleksibel Sukses! OSIS/MPK Campur & Beban Terbagi Rata.',
       schedule: generatedSchedule
     });
   } catch (error: any) {
