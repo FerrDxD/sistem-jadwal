@@ -8,10 +8,14 @@ export default function Dashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pin, setPin] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [isFetching, setIsFetching] = useState(true);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
   const [members, setMembers] = useState<any[]>([]);
+  const [isFetching, setIsFetching] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateResult, setGenerateResult] = useState<any>(null);
+  const [showMembers, setShowMembers] = useState(false);
+  
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + ((1 + 7 - d.getDay()) % 7 || 7)); 
@@ -24,8 +28,6 @@ export default function Dashboard() {
     setIsCheckingAuth(false);
   }, []);
 
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-
   useEffect(() => {
     if (!isAuthenticated) return;
     const fetchMembers = async () => {
@@ -36,84 +38,179 @@ export default function Dashboard() {
     fetchMembers();
   }, [isAuthenticated]);
 
-  const handleLogin = (e: any) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (pin === "OSIS26") {
       setIsAuthenticated(true);
       localStorage.setItem('sasamujampariku_auth', 'true');
+      setLoginError('');
     } else {
-      setLoginError('PIN Salah!');
+      setLoginError('PIN salah! Akses ditolak.');
+      setPin('');
     }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('sasamujampariku_auth');
+    setPin('');
+    setGenerateResult(null);
   };
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    const res = await fetch('/api/generate-schedule', {
-      method: 'POST',
-      body: JSON.stringify({ startDate, days: 5 })
-    });
-    const result = await res.json();
-    setGenerateResult(result);
-    setIsGenerating(false);
+    setGenerateResult(null);
+    try {
+      const response = await fetch('/api/generate-schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate: startDate, days: 5 }),
+      });
+      const result = await response.json();
+      setGenerateResult(result);
+    } catch (error) {
+      console.error("Gagal generate:", error);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   if (isCheckingAuth) return null;
+
   if (!isAuthenticated) {
     return (
-      <main className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        <form onSubmit={handleLogin} className="bg-white p-8 rounded-3xl w-full max-w-sm">
-          <h1 className="text-xl font-bold mb-4 text-center text-slate-800">Login Admin OSIS</h1>
-          <input type="password" value={pin} onChange={(e) => setPin(e.target.value)} className="w-full p-3 border rounded-xl mb-4 text-center text-2xl tracking-widest text-slate-800" placeholder="PIN" />
-          <button className="w-full bg-indigo-600 text-white p-3 rounded-xl font-bold">Buka Kunci</button>
-          {loginError && <p className="text-red-500 text-center mt-2">{loginError}</p>}
-        </form>
+      <main className="min-h-screen bg-slate-900 flex items-center justify-center p-4 selection:bg-indigo-500 selection:text-white">
+        <div className="bg-white p-8 md:p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md border border-white/20">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <span className="text-3xl">🔒</span>
+            </div>
+            <h1 className="text-2xl font-extrabold text-slate-800">Portal Admin</h1>
+            <p className="text-slate-500 text-sm mt-2">Sistem SASAMU & JAMPARIKU</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div>
+              <input type="password" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Masukkan PIN" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 focus:bg-white outline-none transition-all text-center text-2xl tracking-[0.5em] font-mono text-slate-800" autoFocus />
+              {loginError && <p className="text-red-500 text-sm font-medium mt-3 text-center animate-bounce">{loginError}</p>}
+            </div>
+            <button type="submit" className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-colors shadow-lg shadow-indigo-200">Buka Kunci</button>
+          </form>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-[#F8FAFC] p-4 md:p-12">
-      <div className="max-w-6xl mx-auto space-y-8">
-        <header className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-3xl shadow-sm gap-4">
-          <div>
-            <h1 className="text-3xl font-black text-slate-900">Sistem Dua Sesi</h1>
-            <p className="text-slate-500">Pagi (Kelas XI) & Siang (Kelas X)</p>
+    <main className="min-h-screen bg-[#F8FAFC] text-slate-800 p-4 sm:p-6 md:p-12 font-sans selection:bg-indigo-100 selection:text-indigo-900">
+      <div className="max-w-6xl mx-auto space-y-6 md:space-y-8">
+        
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white/60 backdrop-blur-xl border border-white/80 p-5 sm:p-6 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] gap-4 md:gap-0 relative">
+          <button onClick={handleLogout} className="absolute top-6 right-6 md:top-4 md:right-6 text-sm font-semibold text-slate-400 hover:text-red-500 transition-colors">Log Out 🚪</button>
+          <div className="w-full md:w-auto mt-6 md:mt-0">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600">Sistem Automasi Jadwal</h1>
+            <p className="text-slate-500 mt-1 sm:mt-2 text-sm sm:text-base font-medium">SASAMU & JAMPARIKU • SMAN 2 Jonggol</p>
           </div>
-          <div className="flex gap-2">
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="p-3 rounded-xl border" />
-            <button onClick={handleGenerate} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold">{isGenerating ? '...' : 'Generate'}</button>
+          <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto mt-4 md:mt-0">
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-4 py-3 sm:py-3.5 rounded-2xl border border-slate-200 bg-white/50 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium text-slate-600 cursor-pointer" />
+            <button onClick={handleGenerate} disabled={isGenerating} className={`w-full md:w-auto px-6 sm:px-8 py-3 sm:py-3.5 rounded-2xl font-semibold text-white transition-all duration-300 shadow-[0_0_20px_rgba(99,102,241,0.4)] hover:-translate-y-0.5 ${isGenerating ? 'bg-slate-400 shadow-none' : 'bg-gradient-to-r from-indigo-500 to-violet-600'}`}>
+              {isGenerating ? '⚙️ Memproses...' : '✨ Generate Jadwal'}
+            </button>
           </div>
         </header>
 
-        {generateResult && (
-          <div className="space-y-8 animate-in fade-in duration-500">
-            <button onClick={() => generateOfficialPDF(generateResult.schedule)} className="w-full bg-emerald-500 text-white p-4 rounded-2xl font-bold shadow-lg">🖨️ Cetak Jadwal Dua Sesi</button>
-            <div className="grid grid-cols-1 gap-8">
-              {generateResult.schedule.map((hari: any, idx: number) => (
-                <div key={idx} className="bg-white p-6 rounded-3xl border">
-                  <h2 className="text-xl font-bold border-b pb-4 mb-6">{new Date(hari.tanggal).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })}</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {hari.sesi.map((s: any, sIdx: number) => (
-                      <div key={sIdx} className="space-y-4">
-                        <span className={`px-4 py-1 rounded-full text-xs font-bold uppercase ${s.nama_sesi === 'Pagi' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>{s.nama_sesi}</span>
-                        {s.tugas.map((t: any, tIdx: number) => (
-                          <div key={tIdx} className="p-4 bg-slate-50 rounded-2xl">
-                            <p className="text-xs font-bold text-slate-400 mb-2">{t.program}</p>
-                            <div className="flex flex-wrap gap-2">
-                              {t.petugas.map((nama: string, nIdx: number) => (
-                                <span key={nIdx} className="bg-white px-3 py-1 rounded-lg text-sm border shadow-sm">{nama}</span>
-                              ))}
-                            </div>
+        {generateResult && generateResult.status === 'success' && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-5 sm:p-6 rounded-3xl border border-indigo-100 gap-4 md:gap-0">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold text-indigo-900">📅 Hasil Penjadwalan Dua Sesi</h2>
+                <p className="text-indigo-700/70 text-sm mt-1">{generateResult.message}</p>
+              </div>
+              <button onClick={() => generateOfficialPDF(generateResult.schedule)} className="w-full md:w-auto px-6 py-2.5 bg-white text-indigo-600 font-bold rounded-xl shadow-sm border border-indigo-200 hover:bg-indigo-600 hover:text-white transition-colors flex justify-center items-center gap-2">
+                🖨️ Cetak PDF Resmi
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+              {generateResult.schedule.map((hari: any, index: number) => {
+                const dateObj = new Date(hari.tanggal);
+                const formattedDate = new Intl.DateTimeFormat('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(dateObj);
+
+                return (
+                  <div key={index} className="bg-white p-5 sm:p-6 rounded-3xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow">
+                    <div className="border-b border-slate-100 pb-3 sm:pb-4 mb-4 sm:mb-5">
+                      <h3 className="text-base sm:text-lg font-bold text-slate-800">{formattedDate}</h3>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 gap-6">
+                      {hari.sesi.map((sesi: any, sIdx: number) => (
+                        <div key={sIdx} className="space-y-3">
+                          <div className={`px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold uppercase tracking-widest inline-flex items-center gap-2 ${sesi.nama_sesi === 'Pagi' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                            {sesi.nama_sesi === 'Pagi' ? '🌅' : '🌇'} Sesi {sesi.nama_sesi}
                           </div>
-                        ))}
-                      </div>
-                    ))}
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {sesi.tugas.map((tugasData: any, tIdx: number) => (
+                              <div key={tIdx} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                                <h4 className={`text-xs font-bold uppercase tracking-wider mb-3 ${tugasData.program === 'SASAMU' ? 'text-emerald-600' : 'text-indigo-600'}`}>
+                                  {tugasData.program}
+                                </h4>
+                                <ul className="space-y-2">
+                                  {tugasData.petugas.map((nama: string, nIdx: number) => (
+                                    <li key={nIdx} className="bg-white px-3 py-1.5 rounded-lg text-slate-600 text-[11px] sm:text-xs font-medium border border-slate-200 shadow-sm truncate">
+                                      {nama}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
+
+        <div className="bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 overflow-hidden transition-all duration-300">
+          <button onClick={() => setShowMembers(!showMembers)} className="w-full px-5 py-4 sm:px-8 sm:py-6 flex justify-between items-center hover:bg-slate-50 transition-colors focus:outline-none">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-800 flex items-center gap-2">
+              👥 Daftar Anggota Pengurus 
+              <span className="text-sm font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">{members.length} Orang</span>
+            </h2>
+            <div className="text-slate-400 flex items-center gap-2 text-sm font-medium">
+              <span className="hidden sm:inline">{showMembers ? 'Tutup Tabel' : 'Lihat Semua'}</span>
+              <svg className={`w-5 h-5 transform transition-transform duration-300 ${showMembers ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </div>
+          </button>
+          
+          {showMembers && (
+            <div className="overflow-x-auto border-t border-slate-100 animate-in fade-in slide-in-from-top-2 duration-300">
+              <table className="w-full text-left border-collapse min-w-[500px]">
+                <thead>
+                  <tr className="bg-slate-50/50 text-slate-500 text-[10px] sm:text-xs uppercase tracking-widest">
+                    <th className="px-5 sm:px-8 py-3 sm:py-4 font-semibold">Nama Lengkap</th>
+                    <th className="px-5 sm:px-8 py-3 sm:py-4 font-semibold">Kelas</th>
+                    <th className="px-5 sm:px-8 py-3 sm:py-4 font-semibold text-right">Jumlah Tugas</th>
+                  </tr>
+                </thead>
+                <tbody className="text-slate-700 divide-y divide-slate-50">
+                  {isFetching ? (
+                    <tr><td colSpan={3} className="px-5 py-8 text-center text-slate-400 text-sm">Memuat data...</td></tr>
+                  ) : members.map((member) => (
+                    <tr key={member.id} className="hover:bg-slate-50/80 transition-colors group">
+                      <td className="px-5 sm:px-8 py-4 sm:py-5 font-medium group-hover:text-indigo-600 text-xs sm:text-sm">{member.full_name}</td>
+                      <td className="px-5 sm:px-8 py-4 sm:py-5 text-slate-500 text-xs sm:text-sm">{member.class_grade}</td>
+                      <td className="px-5 sm:px-8 py-4 sm:py-5 text-right font-semibold text-slate-600 text-xs sm:text-sm">{member.duty_count} <span className="text-slate-400 font-normal text-[10px]">x</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );

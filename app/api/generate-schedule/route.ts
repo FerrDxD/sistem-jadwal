@@ -16,6 +16,10 @@ export async function POST(request: Request) {
     let availableMembers = [...members].map(m => ({ ...m, current_duty: m.duty_count }));
 
     const SESSIONS = ['Pagi', 'Siang'];
+    
+    // Daftar BPH Sakti yang boleh Double Job
+    const BPH_NAMES = ['cecillia', 'adam', 'fadhli', 'ferdi', 'anggun', 'inez', 'lulu', 'erlangga', 'nayra', 'desti', 'febri tanjung', 'elisa', 'juansyah', 'luqman'];
+    const isBPH = (name: string) => BPH_NAMES.some(bph => name.toLowerCase().includes(bph));
 
     for (let i = 0; i < days; i++) {
       const currentDate = new Date(startDate);
@@ -23,24 +27,34 @@ export async function POST(request: Request) {
       const dateString = currentDate.toISOString().split('T')[0];
 
       let dailyRoster = { tanggal: dateString, sesi: [] as any[] };
-      let assignedToday = new Set(); // Supaya 1 orang tidak double shift di hari yang sama
+      let assignedToday = new Set();
+      let bphAssignedCount = new Map(); // Menghitung job harian BPH agar tidak > 2
 
       for (const session of SESSIONS) {
         let sessionData = { nama_sesi: session, tugas: [] as any[] };
 
         for (const program of programs) {
-          // Filter anggota berdasarkan aturan kelas XI/X untuk JAMPARIKU
-          let eligibleMembers = availableMembers.filter(m => !assignedToday.has(m.id));
-
-          if (program.name === 'JAMPARIKU') {
-            if (session === 'Pagi') {
-              eligibleMembers = eligibleMembers.filter(m => m.class_grade.startsWith('XI'));
-            } else {
-              eligibleMembers = eligibleMembers.filter(m => m.class_grade.startsWith('X.'));
+          
+          let eligibleMembers = availableMembers.filter(m => {
+            // 1. Aturan Kelas JAMPARIKU
+            if (program.name === 'JAMPARIKU') {
+              if (session === 'Pagi' && !m.class_grade.startsWith('XI')) return false;
+              if (session === 'Siang' && !m.class_grade.startsWith('X.')) return false;
             }
-          }
 
-          // Urutkan berdasarkan yang paling jarang bertugas
+            // 2. Aturan Double Job
+            if (assignedToday.has(m.id)) {
+              if (isBPH(m.full_name)) {
+                // BPH boleh double job, tapi maksimal 2 per hari
+                if ((bphAssignedCount.get(m.id) || 0) >= 2) return false;
+                return true; 
+              }
+              return false; // Bukan BPH = Tidak boleh double job
+            }
+            return true;
+          });
+
+          // Prioritaskan yang tugasnya masih sedikit
           eligibleMembers.sort((a, b) => a.current_duty - b.current_duty);
 
           let selected = [];
@@ -49,13 +63,17 @@ export async function POST(request: Request) {
 
           for (const member of eligibleMembers) {
             if (selected.length < program.members_required_per_shift) {
+              // Aturan rasio 3:2 OSIS/MPK
               if (member.organization_role === 'OSIS' && countOSIS >= 3) continue;
               if (member.organization_role === 'MPK' && countMPK >= 3) continue;
 
               selected.push(member);
               assignedToday.add(member.id);
               
-              // Update referensi tugas di list utama
+              if (isBPH(member.full_name)) {
+                bphAssignedCount.set(member.id, (bphAssignedCount.get(member.id) || 0) + 1);
+              }
+
               const idx = availableMembers.findIndex(am => am.id === member.id);
               availableMembers[idx].current_duty += 1;
 
@@ -76,7 +94,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       status: 'success',
-      message: 'Jadwal dua sesi berhasil dibuat sesuai aturan kelas!',
+      message: 'Jadwal 2 Sesi berhasil digenerate! (BPH dikerahkan untuk backup)',
       schedule: generatedSchedule
     });
   } catch (error: any) {
