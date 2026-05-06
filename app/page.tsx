@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [members, setMembers] = useState<any[]>([]);
   const [isFetching, setIsFetching] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isResetting, setIsResetting] = useState(false); // State baru untuk efek loading tombol reset
   const [generateResult, setGenerateResult] = useState<any>(null);
   const [showMembers, setShowMembers] = useState(false);
   
@@ -22,6 +23,13 @@ export default function Dashboard() {
     return d.toISOString().split('T')[0];
   });
 
+  const fetchMembers = async () => {
+    setIsFetching(true);
+    const { data } = await supabase.from('members').select('*').order('class_grade', { ascending: true });
+    if (data) setMembers(data);
+    setIsFetching(false);
+  };
+
   useEffect(() => {
     const authStatus = localStorage.getItem('sasamujampariku_auth');
     if (authStatus === 'true') setIsAuthenticated(true);
@@ -30,11 +38,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    const fetchMembers = async () => {
-      const { data } = await supabase.from('members').select('*').order('class_grade', { ascending: true });
-      if (data) setMembers(data);
-      setIsFetching(false);
-    };
     fetchMembers();
   }, [isAuthenticated]);
 
@@ -68,10 +71,42 @@ export default function Dashboard() {
       });
       const result = await response.json();
       setGenerateResult(result);
+      
+      // Auto-refresh tabel setelah generate sukses
+      if (result.status === 'success') {
+        fetchMembers(); 
+      }
     } catch (error) {
       console.error("Gagal generate:", error);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  // ==========================================
+  // ✨ FUNGSI BARU: RESET TUGAS
+  // ==========================================
+  const handleResetDuty = async () => {
+    const confirmReset = window.confirm("⚠️ PERINGATAN!\n\nApakah kamu yakin ingin me-reset seluruh jumlah tugas anggota menjadi 0? Tindakan ini tidak bisa dibatalkan.");
+    
+    if (!confirmReset) return;
+
+    setIsResetting(true);
+    try {
+      const response = await fetch('/api/reset-duty', { method: 'POST' });
+      const result = await response.json();
+      
+      if (result.status === 'success') {
+        alert("✅ Berhasil! Semua angka tugas sudah di-reset ke 0.");
+        fetchMembers(); // Langsung perbarui tampilan tabel
+      } else {
+        alert("❌ Gagal reset: " + result.error);
+      }
+    } catch (error) {
+      console.error("Gagal reset:", error);
+      alert("Terjadi kesalahan pada sistem saat mereset data.");
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -122,7 +157,7 @@ export default function Dashboard() {
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-5 sm:p-6 rounded-3xl border border-indigo-100 gap-4 md:gap-0">
               <div>
-                <h2 className="text-xl sm:text-2xl font-bold text-indigo-900">📅 Hasil Penjadwalan Dua Sesi</h2>
+                <h2 className="text-xl sm:text-2xl font-bold text-indigo-900">📅 Hasil Penjadwalan</h2>
                 <p className="text-indigo-700/70 text-sm mt-1">{generateResult.message}</p>
               </div>
               <button onClick={() => generateOfficialPDF(generateResult.schedule)} className="w-full md:w-auto px-6 py-2.5 bg-white text-indigo-600 font-bold rounded-xl shadow-sm border border-indigo-200 hover:bg-indigo-600 hover:text-white transition-colors flex justify-center items-center gap-2">
@@ -140,14 +175,12 @@ export default function Dashboard() {
                     <div className="border-b border-slate-100 pb-3 sm:pb-4 mb-4 sm:mb-5">
                       <h3 className="text-base sm:text-lg font-bold text-slate-800">{formattedDate}</h3>
                     </div>
-                    
                     <div className="grid grid-cols-1 gap-6">
                       {hari.sesi.map((sesi: any, sIdx: number) => (
                         <div key={sIdx} className="space-y-3">
                           <div className={`px-4 py-1.5 rounded-xl text-xs sm:text-sm font-bold uppercase tracking-widest inline-flex items-center gap-2 ${sesi.nama_sesi === 'Pagi' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
                             {sesi.nama_sesi === 'Pagi' ? '🌅' : '🌇'} Sesi {sesi.nama_sesi}
                           </div>
-                          
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {sesi.tugas.map((tugasData: any, tIdx: number) => (
                               <div key={tIdx} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
@@ -175,16 +208,31 @@ export default function Dashboard() {
         )}
 
         <div className="bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 overflow-hidden transition-all duration-300">
-          <button onClick={() => setShowMembers(!showMembers)} className="w-full px-5 py-4 sm:px-8 sm:py-6 flex justify-between items-center hover:bg-slate-50 transition-colors focus:outline-none">
+          <div className="w-full px-5 py-4 sm:px-8 sm:py-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <h2 className="text-lg sm:text-xl font-bold text-slate-800 flex items-center gap-2">
               👥 Daftar Anggota Pengurus 
               <span className="text-sm font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">{members.length} Orang</span>
             </h2>
-            <div className="text-slate-400 flex items-center gap-2 text-sm font-medium">
-              <span className="hidden sm:inline">{showMembers ? 'Tutup Tabel' : 'Lihat Semua'}</span>
-              <svg className={`w-5 h-5 transform transition-transform duration-300 ${showMembers ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              {/* ✨ TOMBOL RESET TUGAS */}
+              <button 
+                onClick={handleResetDuty}
+                disabled={isResetting || isFetching}
+                className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-500 hover:text-white font-semibold text-sm rounded-xl transition-colors border border-red-100 flex-1 sm:flex-none text-center"
+              >
+                {isResetting ? 'Meriset...' : '🔄 Reset Tugas'}
+              </button>
+
+              <button 
+                onClick={() => setShowMembers(!showMembers)} 
+                className="text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 px-4 py-2 rounded-xl flex items-center justify-center gap-2 text-sm font-medium transition-colors flex-1 sm:flex-none"
+              >
+                <span className="hidden sm:inline">{showMembers ? 'Tutup Tabel' : 'Lihat Tabel'}</span>
+                <svg className={`w-5 h-5 transform transition-transform duration-300 ${showMembers ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+              </button>
             </div>
-          </button>
+          </div>
           
           {showMembers && (
             <div className="overflow-x-auto border-t border-slate-100 animate-in fade-in slide-in-from-top-2 duration-300">
@@ -203,7 +251,11 @@ export default function Dashboard() {
                     <tr key={member.id} className="hover:bg-slate-50/80 transition-colors group">
                       <td className="px-5 sm:px-8 py-4 sm:py-5 font-medium group-hover:text-indigo-600 text-xs sm:text-sm">{member.full_name}</td>
                       <td className="px-5 sm:px-8 py-4 sm:py-5 text-slate-500 text-xs sm:text-sm">{member.class_grade}</td>
-                      <td className="px-5 sm:px-8 py-4 sm:py-5 text-right font-semibold text-slate-600 text-xs sm:text-sm">{member.duty_count} <span className="text-slate-400 font-normal text-[10px]">x</span></td>
+                      <td className="px-5 sm:px-8 py-4 sm:py-5 text-right font-semibold text-slate-600 text-xs sm:text-sm">
+                        <span className={`inline-block px-2 py-1 rounded-md ${member.duty_count > 0 ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {member.duty_count} x
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

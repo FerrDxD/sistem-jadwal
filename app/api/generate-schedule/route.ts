@@ -149,6 +149,19 @@ export async function POST(request: Request) {
       generatedSchedule.push(dailyRoster);
     }
 
+    // ==========================================
+    // ✨ KODE BARU: SIMPAN JUMLAH TUGAS KE DATABASE
+    // ==========================================
+    for (const member of availableMembers) {
+      // Hanya update ke database kalau jumlah tugasnya beneran nambah
+      if (member.current_duty > (member.duty_count || 0)) {
+        await supabase
+          .from('members')
+          .update({ duty_count: member.current_duty })
+          .eq('id', member.id);
+      }
+    }
+
     return NextResponse.json({
       status: 'success',
       message: 'MPK berhasil diseret masuk! Ferdi & Cecil aman dari kerja rodi.',
