@@ -27,7 +27,6 @@ export async function POST(request: Request) {
       return BPH_NAMES.some(bph => name.toLowerCase().includes(bph.toLowerCase()));
     };
 
-    // Deteksi kelas super ketat
     const isClassXI = (grade: string) => grade && (grade.startsWith('XI.') || grade.startsWith('XI ') || grade === 'XI');
     const isClassX = (grade: string) => grade && !isClassXI(grade) && (grade.startsWith('X.') || grade.startsWith('X ') || grade === 'X');
 
@@ -40,9 +39,7 @@ export async function POST(request: Request) {
       const dateString = currentDate.toISOString().split('T')[0];
 
       let dailyRoster = { tanggal: dateString, sesi: [] as any[] };
-      
-      // HARGA MATI: 1 Hari = 1 Tugas
-      let assignedToday = new Set(); 
+      let assignedToday = new Set(); // Harga Mati: Sehari 1 kali tugas
 
       for (const session of SESSIONS) {
         let sessionData = { nama_sesi: session, tugas: [] as any[] };
@@ -52,72 +49,83 @@ export async function POST(request: Request) {
           let bphInShift = 0;
           let maxBphPerShift = program.name === 'SASAMU' ? 1 : 2;
 
-          const pickAndAssign = (reqClass: string) => {
-            // 1. FILTER MUTLAK (Sama sekali tidak boleh dilanggar)
-            let validPool = availableMembers.filter(m => {
-              if (assignedToday.has(m.id)) return false; // Udah tugas hari ini? Coret.
-              if (!m.class_grade) return false;
-              if (reqClass === 'XI' && !isClassXI(m.class_grade)) return false; // Bukan XI? Coret.
-              if (reqClass === 'X' && !isClassX(m.class_grade)) return false;   // Bukan X? Coret.
-              return true;
-            });
+          // Fungsi pencabut anggota yang super canggih
+          const pickMember = (reqClass: string, forceClass: boolean) => {
+            let pool = availableMembers.filter(m => !assignedToday.has(m.id) && m.class_grade);
 
-            // 2. FILTER IDEAL (Ikuti aturan batas mingguan)
-            let idealPool = validPool.filter(m => {
-              let bph = isBPH(m.full_name);
-              if (program.name === 'SASAMU') return (sasamuCountWeek.get(m.id) || 0) < 1;
-              return (jamparikuCountWeek.get(m.id) || 0) < (bph ? 2 : 1);
-            });
-
-            // 3. POOL CADANGAN (Jika orangnya habis, terpaksa langgar batas mingguan ASALKAN KELASNYA BENAR)
-            let backupPool = validPool.filter(m => !idealPool.includes(m));
-
-            // Urutkan supaya adil dan merata
-            const sorter = (a: any, b: any) => {
+            // Urutkan pool berdasarkan yang PALING SEDIKIT TUGAS agar adil
+            pool.sort((a, b) => {
               let aTotal = (sasamuCountWeek.get(a.id) || 0) + (jamparikuCountWeek.get(a.id) || 0);
               let bTotal = (sasamuCountWeek.get(b.id) || 0) + (jamparikuCountWeek.get(b.id) || 0);
               if (aTotal !== bTotal) return aTotal - bTotal; 
               return (a.current_duty || 0) - (b.current_duty || 0);
+            });
+
+            const matchesClass = (m: any) => {
+              if (reqClass === 'XI') return isClassXI(m.class_grade);
+              if (reqClass === 'X') return isClassX(m.class_grade);
+              return false;
             };
 
-            idealPool.sort(sorter);
-            backupPool.sort(sorter);
+            const isValid = (m: any, checkIdealLimit: boolean, checkClass: boolean, bypassBphLimit: boolean) => {
+              if (checkClass && !matchesClass(m)) return false;
+              
+              let bph = isBPH(m.full_name);
+              if (!bypassBphLimit && bph && bphInShift >= maxBphPerShift) return false;
+
+              if (checkIdealLimit) {
+                // LIMIT IDEAL: Sasamu 1, Jampariku (BPH 2, Biasa 1)
+                if (program.name === 'SASAMU') return (sasamuCountWeek.get(m.id) || 0) < 1;
+                return (jamparikuCountWeek.get(m.id) || 0) < (bph ? 2 : 1);
+              } else {
+                // LIMIT MAKSIMAL (Opsi C): Sasamu boleh 2 kali kalau terpaksa
+                if (program.name === 'SASAMU') return (sasamuCountWeek.get(m.id) || 0) < 2; 
+                return (jamparikuCountWeek.get(m.id) || 0) < (bph ? 3 : 2);
+              }
+            };
 
             let candidate = null;
 
-            // Cari di kumpulan Ideal dulu (BPH jangan sampai ngumpul)
-            candidate = idealPool.find(m => !(isBPH(m.full_name) && bphInShift >= maxBph));
-            if (!candidate && idealPool.length > 0) candidate = idealPool[0]; // Terobos batas kumpul BPH
-            
-            // Kalau kumpulan ideal bener-bener habis, cari di kumpulan Cadangan
-            if (!candidate) candidate = backupPool.find(m => !(isBPH(m.full_name) && bphInShift >= maxBph));
-            if (!candidate && backupPool.length > 0) candidate = backupPool[0];
+            // 1. Cari yang Ideal (Kelas Pas + Limit Ideal + BPH belum numpuk)
+            candidate = pool.find(m => isValid(m, true, true, false));
+            // 2. Kalau BPH numpuk, terobos aja BPH-nya
+            if(!candidate) candidate = pool.find(m => isValid(m, true, true, true));
+            // 3. Kalau limit ideal habis, pakai Opsi C (Naikkan limit mingguan)
+            if(!candidate) candidate = pool.find(m => isValid(m, false, true, false));
+            if(!candidate) candidate = pool.find(m => isValid(m, false, true, true));
+
+            // JIKA SASAMU: Boleh pakai Opsi A (Abaikan aturan kelas demi 5 orang)
+            if (!candidate && !forceClass) {
+              candidate = pool.find(m => isValid(m, true, false, true)); // Cari kelas bebas, limit ideal
+              if(!candidate) candidate = pool.find(m => isValid(m, false, false, true)); // Cari kelas bebas, limit maksimal
+            }
 
             if (candidate) {
               assignedToday.add(candidate.id);
+              if (isBPH(candidate.full_name)) bphInShift++;
+              
               if (program.name === 'SASAMU') sasamuCountWeek.set(candidate.id, (sasamuCountWeek.get(candidate.id) || 0) + 1);
               else jamparikuCountWeek.set(candidate.id, (jamparikuCountWeek.get(candidate.id) || 0) + 1);
               
               const idx = availableMembers.findIndex(am => am.id === candidate.id);
               if (idx !== -1) availableMembers[idx].current_duty += 1;
               
-              if (isBPH(candidate.full_name)) bphInShift++;
               selectedForShift.push(candidate);
             }
           };
 
-          // EKSEKUSI PEMANGGILAN ANGGOTA BERDASARKAN KELAS
           if (program.name === 'SASAMU') {
-            pickAndAssign('XI'); pickAndAssign('XI'); pickAndAssign('XI');
-            pickAndAssign('X'); pickAndAssign('X');
+            // Target 3 XI dan 2 X, tapi tidak dipaksa (forceClass = false)
+            pickMember('XI', false); pickMember('XI', false); pickMember('XI', false);
+            pickMember('X', false); pickMember('X', false);
           } else {
+            // Jampariku WAJIB sesuai kelas (forceClass = true)
             let targetClass = session === 'Pagi' ? 'XI' : 'X';
-            for (let k = 0; k < 5; k++) pickAndAssign(targetClass);
+            for (let k = 0; k < 5; k++) pickMember(targetClass, true);
           }
 
           sessionData.tugas.push({
             program: program.name,
-            // Aku hapus keterangan (OSIS/MPK) dan sisakan kelas aja, biar kamu gampang mantau kalau kelasnya udah 100% rapi
             petugas: selectedForShift.map(m => `${m.full_name} (${m.class_grade})`)
           });
         }
@@ -128,11 +136,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       status: 'success',
-      message: 'Jadwal SUPER KETAT berhasil! (Aturan kelas MUTLAK dituruti).',
+      message: 'Jadwal Sukses! (Jampariku Harga Mati, Sasamu Fleksibel)',
       schedule: generatedSchedule
     });
   } catch (error: any) {
-    console.error("Backend Error:", error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
