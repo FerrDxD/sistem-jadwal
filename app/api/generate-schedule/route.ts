@@ -12,7 +12,6 @@ export async function POST(request: Request) {
     const { data: programs, error: programsError } = await supabase.from('programs').select('*');
     if (programsError) throw programsError;
 
-    // Tambahan label tipe eksplisit agar Vercel lolos build
     let availableMembers: any[] = [...(members || [])].map((m: any) => ({ ...m, current_duty: m.duty_count || 0 }));
     const BPH_NAMES = ['cecillia', 'adam', 'fadhli', 'ferdi', 'anggun', 'inez', 'lulu', 'erlangga', 'nayra', 'febriyanti', 'desti elisa', 'juansyah', 'luqman'];
     
@@ -24,6 +23,7 @@ export async function POST(request: Request) {
     let jamparikuWeekly = new Map<any, number>();
 
     let generatedSchedule: any[] = [];
+    let dbSchedules: any[] = []; // ✨ WADAH BARU UNTUK DIKIRIM KE DATABASE
 
     const orderedPrograms: any[] = [...(programs || [])].sort((a: any, b: any) => a.name === 'JAMPARIKU' ? -1 : 1);
 
@@ -68,7 +68,6 @@ export async function POST(request: Request) {
                   if (currentJampariku >= (bph ? 2 : 1)) return false;
                 }
               }
-              
               return true;
             });
 
@@ -77,7 +76,6 @@ export async function POST(request: Request) {
               pool.splice(index, 1);
               selected.push(m);
               assignedToday.add(m.id);
-              
               if (program.name === 'SASAMU') sasamuWeekly.set(m.id, (sasamuWeekly.get(m.id) || 0) + 1);
               else jamparikuWeekly.set(m.id, (jamparikuWeekly.get(m.id) || 0) + 1);
 
@@ -88,17 +86,19 @@ export async function POST(request: Request) {
             return false;
           };
 
-          while (selected.length < program.members_required_per_shift) {
-            if (!tryPick(false)) break;
-          }
+          while (selected.length < program.members_required_per_shift) if (!tryPick(false)) break;
+          while (selected.length < program.members_required_per_shift) if (!tryPick(true)) break; 
 
-          while (selected.length < program.members_required_per_shift) {
-            if (!tryPick(true)) break; 
-          }
+          const petugasList = selected.map((m: any) => `${m.full_name} (${m.class_grade})`);
+          
+          sessionData.tugas.push({ program: program.name, petugas: petugasList });
 
-          sessionData.tugas.push({
+          // ✨ SIMPAN JADWAL UNTUK DATABASE
+          dbSchedules.push({
+            tanggal: dateString,
+            sesi: session,
             program: program.name,
-            petugas: selected.map((m: any) => `${m.full_name} (${m.class_grade})`)
+            petugas: petugasList
           });
         }
         
@@ -108,6 +108,12 @@ export async function POST(request: Request) {
       generatedSchedule.push(dailyRoster);
     }
 
+    // ✨ Hapus jadwal lama di rentang tanggal ini agar tidak numpuk, lalu masukkan yang baru
+    const endDateString = generatedSchedule[generatedSchedule.length - 1].tanggal;
+    await supabase.from('schedules').delete().gte('tanggal', startDate).lte('tanggal', endDateString);
+    if (dbSchedules.length > 0) await supabase.from('schedules').insert(dbSchedules);
+
+    // Sync Duty Count
     for (const m of availableMembers) {
       if (m.current_duty > (m.duty_count || 0)) {
         await supabase.from('members').update({ duty_count: m.current_duty }).eq('id', m.id);
